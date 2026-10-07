@@ -2,218 +2,130 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 
+#define SERVER_IP "127.0.0.1"
 #define PORT 6288
-#define BACKLOG 10
 #define MAXLINE 1024
-
-void *handle_client(void *arg)
-{
-    int connfd = *(int *)arg;
-    char buffer[MAXLINE];
-
-    free(arg);
-
-    printf("Client thread started.\n");
-
-    while (1)
-    {
-        ssize_t n = recv(connfd, buffer, sizeof(buffer) - 1, 0);
-
-        if (n < 0)
-        {
-            perror("recv");
-            break;
-        }
-
-        if (n == 0)
-        {
-            printf("Client disconnected.\n");
-            break;
-        }
-
-        buffer[n] = '\0';
-
-        printf("Received: %s", buffer);
-
-        /* REGISTER */
-        if (strncmp(buffer, "REGISTER ", 9) == 0)
-        {
-            char username[100];
-            char response[MAXLINE];
-
-            if (sscanf(buffer + 9, "%99s", username) == 1)
-            {
-                snprintf(response,
-                         sizeof(response),
-                         "OK REGISTERED NID:7602\n");
-
-                if (send(connfd,
-                         response,
-                         strlen(response),
-                         0) < 0)
-                {
-                    perror("send");
-                    break;
-                }
-
-                printf("Response sent: %s", response);
-                printf("User registered: %s\n", username);
-            }
-        }
-
-        /* QUIT */
-        else if (strncmp(buffer, "QUIT", 4) == 0)
-        {
-            char response[MAXLINE];
-
-            snprintf(response,
-                     sizeof(response),
-                     "OK BYE NID:7602\n");
-
-            send(connfd,
-                 response,
-                 strlen(response),
-                 0);
-
-            printf("Client requested QUIT.\n");
-
-            break;
-        }
-
-        /* Unknown command */
-        else
-        {
-            char response[MAXLINE];
-
-            snprintf(response,
-                     sizeof(response),
-                     "ERR 999 UNKNOWN_COMMAND NID:7602\n");
-
-            send(connfd,
-                 response,
-                 strlen(response),
-                 0);
-
-            printf("Unknown command.\n");
-        }
-    }
-
-    close(connfd);
-
-    printf("Client thread finished.\n");
-
-    return NULL;
-}
 
 int main(void)
 {
-    int listenfd;
+    int sockfd;
     struct sockaddr_in server_addr;
+    char sendline[MAXLINE];
+    char recvline[MAXLINE];
 
-    /* Create TCP socket */
-    listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (listenfd < 0)
+    if (sockfd < 0)
     {
         perror("socket");
         exit(EXIT_FAILURE);
     }
 
-    /* Allow address reuse */
-    int opt = 1;
-
-    if (setsockopt(listenfd,
-                   SOL_SOCKET,
-                   SO_REUSEADDR,
-                   &opt,
-                   sizeof(opt)) < 0)
-    {
-        perror("setsockopt");
-        close(listenfd);
-        exit(EXIT_FAILURE);
-    }
-
-    /* Configure server address */
     memset(&server_addr, 0, sizeof(server_addr));
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     server_addr.sin_port = htons(PORT);
 
-    /* Bind */
-    if (bind(listenfd,
-             (struct sockaddr *)&server_addr,
-             sizeof(server_addr)) < 0)
+    if (inet_pton(AF_INET,
+                  SERVER_IP,
+                  &server_addr.sin_addr) <= 0)
     {
-        perror("bind");
-        close(listenfd);
+        perror("inet_pton");
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
-    /* Listen */
-    if (listen(listenfd, BACKLOG) < 0)
+    if (connect(sockfd,
+                (struct sockaddr *)&server_addr,
+                sizeof(server_addr)) < 0)
     {
-        perror("listen");
-        close(listenfd);
+        perror("connect");
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
-    printf("NetMessenger server started.\n");
-    printf("Listening on TCP port %d\n", PORT);
-    printf("NID:7602\n");
+    printf("Connected to NetMessenger server.\n");
 
-    /* Accept clients */
     while (1)
     {
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
+        fd_set readfds;
 
-        int connfd = accept(listenfd,
-                            (struct sockaddr *)&client_addr,
-                            &client_len);
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        FD_SET(sockfd, &readfds);
 
-        if (connfd < 0)
+        int maxfd = sockfd;
+
+        if (select(maxfd + 1,
+                   &readfds,
+                   NULL,
+                   NULL,
+                   NULL) < 0)
         {
-            perror("accept");
-            continue;
+            perror("select");
+            break;
         }
 
-        printf("Client connected: %s\n",
-               inet_ntoa(client_addr.sin_addr));
-
-        int *client_socket = malloc(sizeof(int));
-
-        if (client_socket == NULL)
+        /* Message received from server */
+        if (FD_ISSET(sockfd, &readfds))
         {
-            perror("malloc");
-            close(connfd);
-            continue;
+            ssize_t n = recv(sockfd,
+                             recvline,
+                             sizeof(recvline) - 1,
+                             0);
+
+            if (n < 0)
+            {
+                perror("recv");
+                break;
+            }
+
+            if (n == 0)
+            {
+                printf("\nServer closed the connection.\n");
+                break;
+            }
+
+            recvline[n] = '\0';
+
+            printf("\nServer: %s", recvline);
+            printf("NetMessenger> ");
+            fflush(stdout);
         }
 
-        *client_socket = connfd;
-
-        pthread_t thread_id;
-
-        if (pthread_create(&thread_id,
-                           NULL,
-                           handle_client,
-                           client_socket) != 0)
+        /* User typed a command */
+        if (FD_ISSET(STDIN_FILENO, &readfds))
         {
-            perror("pthread_create");
-            close(connfd);
-            free(client_socket);
-            continue;
-        }
 
-        pthread_detach(thread_id);
+            if (fgets(sendline,
+                      sizeof(sendline),
+                      stdin) == NULL)
+            {
+                break;
+            }
+
+            if (send(sockfd,
+                     sendline,
+                     strlen(sendline),
+                     0) < 0)
+            {
+                perror("send");
+                break;
+            }
+
+            if (strncmp(sendline, "QUIT", 4) == 0)
+            {
+                break;
+            }
+        }
     }
 
-    close(listenfd);
+    close(sockfd);
 
     return 0;
 }

@@ -10,6 +10,14 @@
 #define PORT 6288
 #define BACKLOG 10
 #define MAXLINE 1024
+#define MAX_CLIENTS 100
+#define NID "7602"
+
+int client_sockets[MAX_CLIENTS];
+int client_count = 0;
+
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 
 void *handle_client(void *arg)
 {
@@ -17,6 +25,16 @@ void *handle_client(void *arg)
     char buffer[MAXLINE];
 
     free(arg);
+
+pthread_mutex_lock(&clients_mutex);
+
+if (client_count < MAX_CLIENTS)
+{
+    client_sockets[client_count] = connfd;
+    client_count++;
+}
+
+pthread_mutex_unlock(&clients_mutex);
 
     printf("Client thread started.\n");
 
@@ -77,6 +95,56 @@ else if (strncmp(buffer, "LIST", 4) == 0)
     printf("LIST response sent.\n");
 }
 
+else if (strncmp(buffer, "BCAST ", 6) == 0)
+{
+    char message[MAXLINE];
+    char response[MAXLINE];
+
+    snprintf(message,
+             sizeof(message),
+             "BCAST %s",
+             buffer + 6);
+
+    pthread_mutex_lock(&clients_mutex);
+
+    for (int i = 0; i < client_count; i++)
+    {
+
+if (client_sockets[i] != connfd)
+{
+    ssize_t sent = send(client_sockets[i],
+                        message,
+                        strlen(message),
+                        0);
+
+    if (sent < 0)
+    {
+        perror("BCAST send");
+    }
+    else
+    {
+        printf("BCAST sent %zd bytes to socket %d\n",
+               sent,
+               client_sockets[i]);
+    }
+}
+
+}
+    pthread_mutex_unlock(&clients_mutex);
+
+    snprintf(response,
+             sizeof(response),
+             "OK BCAST SENT NID:%s\n",
+             NID);
+
+    send(connfd,
+         response,
+         strlen(response),
+         0);
+
+    printf("BCAST message sent to clients: %s", buffer + 6);
+}
+
 
        else if (strncmp(buffer, "QUIT", 4) == 0)
         {
@@ -106,10 +174,28 @@ else if (strncmp(buffer, "LIST", 4) == 0)
         }
     }
 
+pthread_mutex_lock(&clients_mutex);
+
+    for (int i = 0; i < client_count; i++)
+    {
+        if (client_sockets[i] == connfd)
+        {
+            for (int j = i; j < client_count - 1; j++)
+            {
+                client_sockets[j] = client_sockets[j + 1];
+            }
+
+            client_count--;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&clients_mutex);
+
     close(connfd);
 
-    printf("Client thread finished.\n");
-
+    printf("Client disconnected.\n");
+    printf("Client thread finished.\n"); 
     return NULL;
 }
 
