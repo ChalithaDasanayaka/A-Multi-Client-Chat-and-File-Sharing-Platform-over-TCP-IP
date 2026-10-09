@@ -1,0 +1,18 @@
+NetMessenger Test Log
+Registration: IT23760288
+Port: 6288
+NID: 7602
+
+[REGISTER]
+Client: Chalitha-client2
+Response: OK REGISTERED NID:7602
+
+[LIST]
+Response: OK LIST Chalitha-client NID:7602
+
+[BCAST]
+Message: Hello everyone
+Response: OK BCAST SENT NID:7602
+
+[QUIT]
+Client disconnected successfully.
